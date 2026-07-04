@@ -1,0 +1,56 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: flood_monitoring
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d flood_monitoring"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+    environment:
+      DJANGO_SECRET_KEY: change-me-in-production
+      DJANGO_DEBUG: "False"
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,backend
+      DJANGO_CORS_ALLOWED_ORIGINS: http://localhost:8080,http://127.0.0.1:8080
+      DB_ENGINE: django.db.backends.postgresql
+      DB_NAME: flood_monitoring
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_HOST: db
+      DB_PORT: 5432
+      MQTT_BROKER_HOST: broker.emqx.io
+      MQTT_BROKER_PORT: 1883
+      MQTT_CLIENT_ID: mqttx_0d0ab77a
+      MQTT_TOPIC_RAIN: RAINSENSORANCOL
+      MQTT_TOPIC_KAI: WATERLEVELSENSORKAI
+      MQTT_TOPIC_KRL: WATERLEVELSENSORKRL
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost:8000
+        VITE_WS_URL: ws://localhost:8000
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+volumes:
+  postgres_data:

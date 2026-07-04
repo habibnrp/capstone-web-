@@ -1,0 +1,8 @@
+node_modules/
+dist/
+django-backend/.venv/
+django-backend/db.sqlite3
+__pycache__/
+*.pyc
+.env
+.DS_Store
