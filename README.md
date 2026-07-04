@@ -28,4 +28,8 @@
 
   The Docker stack uses PostgreSQL, the Django backend, and an Nginx-served frontend.
 
+  The default admin account is seeded automatically on startup:
+  - Email: `admin@kai.id`
+  - Password: `Admin1234!`
+
 
