@@ -9,12 +9,18 @@ import secrets
 from datetime import timedelta
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from django.conf import settings
 from django.core.mail import send_mail
 
 from .models import SensorReading, MonitoringUser, SignupOTP, SystemSetting
 from .serializers import (
+    KAI_MAX_CM,
+    KAI_MIN_CM,
+    KRL_MAX_CM,
+    KRL_MIN_CM,
     SensorReadingSerializer,
     MonitoringUserSerializer,
     SystemSettingSerializer,
@@ -34,6 +40,9 @@ except Exception:
 
 DEFAULT_SENSOR_TOPICS = ["RAINSENSOR", "WATERLEVELSENSORKAI", "WATERLEVELSENSORKRL"]
 SENSOR_REGISTRY_KEY = "sensor_registry"
+SENSOR_ALERT_STATE_PREFIX = "sensor_alert_state:"
+SENSOR_ALERT_GLOBAL_KEY = "sensor_alert_state:telegram_global"
+SENSOR_ALERT_COOLDOWN_MINUTES = 1
 
 
 def _build_display_name(email: str) -> str:
@@ -68,6 +77,131 @@ def _read_json_setting(key, default_value):
 
 def _write_json_setting(key, value):
     SystemSetting.objects.update_or_create(key=key, defaults={'value': json.dumps(value)})
+
+
+def _sensor_alert_key(topic: str) -> str:
+    return f"{SENSOR_ALERT_STATE_PREFIX}{(topic or '').strip().upper()}"
+
+
+def _get_sensor_alert_state(topic: str):
+    return _read_json_setting(_sensor_alert_key(topic), {})
+
+
+def _set_sensor_alert_state(topic: str, value):
+    _write_json_setting(_sensor_alert_key(topic), value)
+
+
+def _topic_alert_level(topic: str, value):
+    normalized_topic = (topic or '').upper()
+    try:
+        numeric_value = float(value)
+    except (TypeError, ValueError):
+        return 'SAFE'
+
+    if 'RAIN' in normalized_topic:
+        if numeric_value >= 50:
+            return 'CRITICAL'
+        if numeric_value >= 25:
+            return 'WARNING'
+        return 'SAFE'
+
+    if 'KAI' in normalized_topic:
+        if numeric_value >= KAI_MAX_CM:
+            return 'CRITICAL'
+        if numeric_value >= (KAI_MAX_CM - 3):
+            return 'WARNING'
+        return 'SAFE'
+
+    if 'KRL' in normalized_topic:
+        if numeric_value >= KRL_MAX_CM:
+            return 'CRITICAL'
+        if numeric_value >= 3:
+            return 'WARNING'
+        return 'SAFE'
+
+    return 'SAFE'
+
+
+def _telegram_request(bot_token: str, chat_id: str, message: str):
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = json.dumps({'chat_id': chat_id, 'text': message}).encode('utf-8')
+
+    if requests is not None:
+        resp = requests.post(url, json={'chat_id': chat_id, 'text': message}, timeout=10)
+        response_text = resp.text
+        response_json = resp.json() if resp.status_code == 200 else None
+        return resp.status_code, response_text, response_json
+
+    req = urllib_request.Request(url, data=payload, headers={'Content-Type': 'application/json'}, method='POST')
+    with urllib_request.urlopen(req, timeout=10) as resp:
+        response_text = resp.read().decode('utf-8')
+        response_json = json.loads(response_text) if response_text else {}
+        return getattr(resp, 'status', 200), response_text, response_json
+
+
+def _send_telegram_message(bot_token: str, chat_id: str, message: str):
+    status_code, response_text, response_json = _telegram_request(bot_token, chat_id, message)
+    if status_code != 200:
+        raise RuntimeError(response_text or 'telegram request failed')
+    return response_json
+
+
+def _send_sensor_alert(reading: SensorReading, status_label: str):
+    if status_label not in ('WARNING', 'CRITICAL'):
+        return False
+
+    bot_token = SystemSetting.objects.filter(key='telegram_bot_token').values_list('value', flat=True).first()
+    chat_id = SystemSetting.objects.filter(key='telegram_chat_id').values_list('value', flat=True).first()
+    if not bot_token or not chat_id:
+        logger.debug('Skipping sensor alert for %s: telegram not configured', reading.topic)
+        return False
+
+    global_state = _read_json_setting(SENSOR_ALERT_GLOBAL_KEY, {}) or {}
+    global_last_sent_raw = global_state.get('sent_at')
+    global_last_sent_at = parse_datetime(global_last_sent_raw) if global_last_sent_raw else None
+    if global_last_sent_at and timezone.is_naive(global_last_sent_at):
+        global_last_sent_at = timezone.make_aware(global_last_sent_at, timezone.get_current_timezone())
+
+    if global_last_sent_at is not None:
+        if timezone.now() - global_last_sent_at < timedelta(minutes=SENSOR_ALERT_COOLDOWN_MINUTES):
+            logger.debug('Skipping sensor alert for %s: telegram global cooldown active', reading.topic)
+            return False
+
+    state = _get_sensor_alert_state(reading.topic) or {}
+    previous_status = str(state.get('status') or '').upper()
+    last_sent_raw = state.get('sent_at')
+    last_sent_at = parse_datetime(last_sent_raw) if last_sent_raw else None
+    if last_sent_at and timezone.is_naive(last_sent_at):
+        last_sent_at = timezone.make_aware(last_sent_at, timezone.get_current_timezone())
+
+    cooldown_active = False
+    if last_sent_at is not None:
+        cooldown_active = timezone.now() - last_sent_at < timedelta(minutes=SENSOR_ALERT_COOLDOWN_MINUTES)
+
+    if previous_status == status_label and cooldown_active:
+        return False
+
+    message = (
+        f"[Flood Monitor] Sensor alert {status_label}\n"
+        f"Topic: {reading.topic}\n"
+        f"Location: {reading.location}\n"
+        f"Value: {reading.value}\n"
+        f"Raw: {reading.raw}\n"
+        f"Time: {timezone.localtime(reading.timestamp).strftime('%d-%m-%Y %H:%M')}"
+    )
+
+    _send_telegram_message(bot_token, chat_id, message)
+    _set_sensor_alert_state(reading.topic, {
+        'status': status_label,
+        'sent_at': timezone.now().isoformat(),
+    })
+    _write_json_setting(SENSOR_ALERT_GLOBAL_KEY, {
+        'topic': reading.topic,
+        'status': status_label,
+        'sent_at': timezone.now().isoformat(),
+    })
+    add_activity_log('system', f'Sent {status_label.lower()} sensor alert for {reading.topic}')
+    return True
 
 
 def _normalize_sensor_registry_item(item):
@@ -244,6 +378,13 @@ def ingest(request):
             timestamp=ts
         )
 
+        try:
+            alert_status = _topic_alert_level(reading.topic, reading.value)
+            _send_sensor_alert(reading, alert_status)
+        except Exception as alert_error:
+            logger.exception('Failed to send sensor alert')
+            add_error_log(f"Sensor alert failed for {reading.topic}: {str(alert_error)}", severity='High')
+
         # broadcast realtime update to websocket subscribers
         channel_layer = get_channel_layer()
         if channel_layer:
@@ -277,7 +418,8 @@ def realtime(request):
 @api_view(["GET"])
 def historical(request):
     """Get historical sensor readings with optional filtering"""
-    qs = SensorReading.objects.all().order_by('-timestamp')
+    qs = SensorReading.objects.all().order_by('timestamp')
+    granularity = (request.query_params.get('granularity') or 'minute').strip().lower()
     
     # Filter by date range
     date_from = request.query_params.get('dateFrom')
@@ -303,11 +445,22 @@ def historical(request):
     if topic:
         qs = qs.filter(topic=topic)
     
-    # Limit results
+    # Collapse repeated readings into one row per minute by default.
+    if granularity == 'raw':
+        limit = min(int(request.query_params.get('limit', 500)), 1000)
+        return Response(SensorReadingSerializer(qs.order_by('-timestamp')[:limit], many=True).data)
+
+    grouped = {}
+    for reading in qs:
+        bucket_timestamp = reading.timestamp.replace(second=0, microsecond=0)
+        bucket_key = (reading.topic, reading.location, bucket_timestamp)
+        current = grouped.get(bucket_key)
+        if current is None or reading.timestamp >= current.timestamp:
+            grouped[bucket_key] = reading
+
+    aggregated = sorted(grouped.values(), key=lambda item: item.timestamp, reverse=True)
     limit = min(int(request.query_params.get('limit', 500)), 1000)
-    qs = qs[:limit]
-    
-    return Response(SensorReadingSerializer(qs, many=True).data)
+    return Response(SensorReadingSerializer(aggregated[:limit], many=True).data)
 
 
 @api_view(["GET"])
@@ -713,19 +866,16 @@ def admin_test_telegram(request):
 
     message = data.get('message') or 'Test alert from Flood Monitoring System'
 
-    if requests is None:
-        return Response({'error': 'requests library not available on server'}, status=rf_status.HTTP_500_INTERNAL_SERVER_ERROR)
-
     try:
-        url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        resp = requests.post(url, json={'chat_id': chat_id, 'text': message})
-        if resp.status_code != 200:
-            logger.debug('Telegram send failed: %s', resp.text)
-            add_error_log(f"Telegram send failed: {resp.text}", severity='Medium')
-            return Response({'error': 'failed to send telegram message', 'details': resp.text}, status=rf_status.HTTP_502_BAD_GATEWAY)
+        result = _send_telegram_message(bot_token, chat_id, message)
         add_activity_log('admin', 'Sent Telegram test message')
-        return Response({'status': 'sent', 'result': resp.json()})
+        return Response({'status': 'sent', 'result': result})
     except Exception as e:
+        request_exception = requests.RequestException if requests is not None else tuple()
+        if isinstance(e, request_exception) or isinstance(e, urllib_error.URLError) or isinstance(e, RuntimeError):
+            logger.exception('Telegram request failed')
+            add_error_log(f"Telegram request failed: {str(e)}", severity='High')
+            return Response({'error': 'failed to send telegram message', 'details': str(e)}, status=rf_status.HTTP_502_BAD_GATEWAY)
         logger.exception('Failed to send telegram message')
         add_error_log(f"Telegram exception: {str(e)}", severity='High')
         return Response({'error': str(e)}, status=rf_status.HTTP_500_INTERNAL_SERVER_ERROR)

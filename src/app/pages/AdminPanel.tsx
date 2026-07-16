@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -23,15 +24,17 @@ import {
 } from "lucide-react";
 
 // Dynamic state fetched from backend
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000").replace(/\/$/, "").replace(/\/api$/, "");
 
 const defaultUsers: any[] = []
 const defaultSensors: any[] = []
 
 
 export default function AdminPanel() {
-  const [thresholdKRL, setThresholdKRL] = useState("60");
-  const [thresholdKAI, setThresholdKAI] = useState("70");
+  const navigate = useNavigate();
+  const [thresholdKRL, setThresholdKRL] = useState("5");
+  const [thresholdKAI, setThresholdKAI] = useState("15");
+  const [thresholdRain, setThresholdRain] = useState("50");
   const [users, setUsers] = useState(defaultUsers);
   const [sensors, setSensors] = useState(defaultSensors);
   const [activityLogs, setActivityLogs] = useState<any[]>([]);
@@ -46,6 +49,27 @@ export default function AdminPanel() {
   const [networkStatus, setNetworkStatus] = useState("Checking");
   const [networkLatency, setNetworkLatency] = useState<number | null>(null);
   const [lastMqttSeen, setLastMqttSeen] = useState<number | null>(null);
+
+  const handleAuthFailure = () => {
+    localStorage.removeItem('fm_token');
+    localStorage.removeItem('fm_user');
+    alert('Session expired, please log in again');
+    navigate('/login');
+  };
+
+  const apiFetch = async (url: string, options: RequestInit = {}) => {
+    const token = localStorage.getItem('fm_token');
+    const headers = new Headers(options.headers || {});
+    if (token) headers.set('Authorization', `Bearer ${token}`);
+    const response = await fetch(url, { ...options, headers });
+    if (response.status === 401) {
+      const body = await response.clone().json().catch(() => ({}));
+      if ((body?.error || '').toLowerCase().includes('token')) {
+        handleAuthFailure();
+      }
+    }
+    return response;
+  };
 
   useEffect(() => {
     fetchUsers();
@@ -124,10 +148,7 @@ export default function AdminPanel() {
 
   async function fetchUsers() {
     try {
-      const token = localStorage.getItem('fm_token');
-      const headers:any = {};
-      if(token) headers['Authorization'] = `Bearer ${token}`;
-      const res = await fetch(`${API_BASE}/api/monitoring/admin/users/`,{headers});
+      const res = await apiFetch(`${API_BASE}/api/monitoring/admin/users/`);
       if (!res.ok) throw new Error('Failed');
       const data = await res.json();
       setUsers(data);
@@ -143,10 +164,7 @@ export default function AdminPanel() {
 
   async function deleteUser(id:number){
     if(!confirm('Delete user?')) return;
-    const token = localStorage.getItem('fm_token');
-    const headers:any = {'Content-Type':'application/json'};
-    if(token) headers['Authorization'] = `Bearer ${token}`;
-    await fetch(`${API_BASE}/api/monitoring/admin/users/${id}/`,{method:'DELETE', headers});
+    await apiFetch(`${API_BASE}/api/monitoring/admin/users/${id}/`,{method:'DELETE', headers:{'Content-Type':'application/json'}});
     fetchUsers();
   }
 
@@ -158,12 +176,9 @@ export default function AdminPanel() {
   async function makeAdmin(user:any){
     if (user.role === 'admin') return;
     if(!confirm(`Set ${user.name} as admin?`)) return;
-    const token = localStorage.getItem('fm_token');
-    const headers:any = {'Content-Type':'application/json'};
-    if(token) headers['Authorization'] = `Bearer ${token}`;
-    const res = await fetch(`${API_BASE}/api/monitoring/admin/users/${user.id}/`,{
+    const res = await apiFetch(`${API_BASE}/api/monitoring/admin/users/${user.id}/`,{
       method:'PUT',
-      headers,
+      headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ role: 'admin' }),
     });
     if (!res.ok) {
@@ -193,15 +208,14 @@ export default function AdminPanel() {
   async function handleUserModalSave(){
     const { id, name, email, password } = userModalData;
     if(!name || !email){ alert('Name and email required'); return; }
-    if(!email.toLowerCase().endsWith('@kai.id')){ alert('Email must end with @kai.id'); return; }
     try{
       if(userModalMode === 'add'){
-        const res = await fetch(`${API_BASE}/api/monitoring/admin/users/`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,email,password})});
+        const res = await apiFetch(`${API_BASE}/api/monitoring/admin/users/`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,email,password})});
         if(!res.ok){ const b = await res.json().catch(()=>({})); alert('Create failed: '+(b.error||res.statusText)); return; }
       } else {
         const payload:any = { name, email };
         if(password) payload.password = password;
-        const res = await fetch(`${API_BASE}/api/monitoring/admin/users/${id}/`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        const res = await apiFetch(`${API_BASE}/api/monitoring/admin/users/${id}/`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
         if(!res.ok){ const b = await res.json().catch(()=>({})); alert('Update failed: '+(b.error||res.statusText)); return; }
       }
       await fetchUsers();
@@ -326,6 +340,7 @@ export default function AdminPanel() {
       data.forEach((it:any)=> map[it.key]=it.value);
       if(map['threshold_krl']) setThresholdKRL(map['threshold_krl']);
       if(map['threshold_kai']) setThresholdKAI(map['threshold_kai']);
+      if(map['threshold_rain'] || map['rain_threshold']) setThresholdRain(map['threshold_rain'] || map['rain_threshold']);
       if(map['telegram_bot_token']) setTelegramBotToken(map['telegram_bot_token']);
       if(map['telegram_chat_id']) setTelegramChatId(map['telegram_chat_id']);
     }catch(e){console.error(e)}
@@ -338,6 +353,7 @@ export default function AdminPanel() {
       if(token) headers['Authorization'] = `Bearer ${token}`;
       await fetch(`${API_BASE}/api/monitoring/admin/settings/`,{method:'POST',headers,body:JSON.stringify({key:'threshold_krl', value:thresholdKRL})});
       await fetch(`${API_BASE}/api/monitoring/admin/settings/`,{method:'POST',headers,body:JSON.stringify({key:'threshold_kai', value:thresholdKAI})});
+      await fetch(`${API_BASE}/api/monitoring/admin/settings/`,{method:'POST',headers,body:JSON.stringify({key:'threshold_rain', value:thresholdRain})});
       alert('Settings saved');
     }catch(e){console.error(e)}
   }
@@ -522,58 +538,51 @@ export default function AdminPanel() {
 
             {/* System Settings Tab */}
             <TabsContent value="settings" className="space-y-6">
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">Water Level Thresholds</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl">
-                  <div className="space-y-2">
-                    <Label htmlFor="thresholdKRL">KRL Warning Threshold (cm)</Label>
-                    <Input
-                      id="thresholdKRL"
-                      type="number"
-                      value={thresholdKRL}
-                      onChange={(e) => setThresholdKRL(e.target.value)}
-                    />
-                    <p className="text-sm text-gray-500">Current: 60 cm</p>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="thresholdKAI">KAI Warning Threshold (cm)</Label>
-                    <Input
-                      id="thresholdKAI"
-                      type="number"
-                      value={thresholdKAI}
-                      onChange={(e) => setThresholdKAI(e.target.value)}
-                    />
-                    <p className="text-sm text-gray-500">Current: 70 cm</p>
-                  </div>
-                </div>
-                <Button onClick={() => saveSettings()} className="mt-4 bg-blue-600 hover:bg-blue-700">
-                  Save Settings
-                </Button>
-              </div>
-
               <div className="border-t pt-6">
-                <h3 className="text-lg font-semibold text-gray-900 mb-4">Alert Configuration</h3>
-                <div className="space-y-4 max-w-2xl">
-                  <div className="p-4 border rounded-lg">
-                    <div>
-                      <p className="font-medium text-gray-900">Telegram Alerts</p>
-                      <p className="text-sm text-gray-500">Configure Telegram bot token and chat id for alert delivery</p>
-                    </div>
-                    <div className="mt-4 grid grid-cols-1 gap-4">
-                      <div>
-                        <Label>Bot Token</Label>
-                        <Input value={telegramBotToken} onChange={(e:any)=>setTelegramBotToken(e.target.value)} placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" />
-                      </div>
-                      <div>
-                        <Label>Chat ID</Label>
-                        <Input value={telegramChatId} onChange={(e:any)=>setTelegramChatId(e.target.value)} placeholder="-1001234567890 or 123456789" />
-                      </div>
-                      <div className="flex justify-end gap-2">
-                        <Button variant="outline" onClick={() => sendTestTelegram()} disabled={!telegramBotToken || !telegramChatId}>Send test message</Button>
-                        <Button onClick={() => saveTelegramSettings()} className="bg-blue-600 hover:bg-blue-700">Save Telegram Settings</Button>
-                      </div>
-                    </div>
+                <div className="max-w-3xl space-y-4">
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-900">Alert Configuration</h3>
+                    <p className="text-sm text-gray-500 mt-1">Atur kredensial Telegram dan level STOP sensor KRL/KAI.</p>
                   </div>
+
+                  <Card className="border border-gray-200 shadow-sm">
+                    <CardContent className="pt-6">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <p className="font-semibold text-gray-900">Telegram Alerts</p>
+                          <p className="text-sm text-gray-500 mt-1">Gunakan bot token dan chat ID aktif agar notifikasi bisa terkirim.</p>
+                        </div>
+                      </div>
+
+                      <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <div className="space-y-2 md:col-span-2">
+                          <Label>Bot Token</Label>
+                          <Input
+                            value={telegramBotToken}
+                            onChange={(e:any)=>setTelegramBotToken(e.target.value)}
+                            placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+                          />
+                        </div>
+                        <div className="space-y-2 md:col-span-2">
+                          <Label>Chat ID</Label>
+                          <Input
+                            value={telegramChatId}
+                            onChange={(e:any)=>setTelegramChatId(e.target.value)}
+                            placeholder="-1001234567890 or 123456789"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                        <Button variant="outline" onClick={() => sendTestTelegram()} disabled={!telegramBotToken || !telegramChatId}>
+                          Send test message
+                        </Button>
+                        <Button onClick={() => saveTelegramSettings()} className="bg-blue-600 hover:bg-blue-700">
+                          Save Telegram Settings
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
                 </div>
               </div>
             </TabsContent>
@@ -590,6 +599,48 @@ export default function AdminPanel() {
                   Add Sensor
                 </Button>
               </div>
+              <Card className="border border-gray-200 shadow-sm">
+                <CardContent className="pt-6">
+                  <div className="mb-4">
+                    <h4 className="text-base font-semibold text-gray-900">Calibration Thresholds</h4>
+                    <p className="text-sm text-gray-500">KRL aman 0-2 cm, warning 3-4 cm, STOP 5 cm; KAI warning 12-14 cm dan STOP 15 cm.</p>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 max-w-4xl">
+                    <div className="space-y-2">
+                      <Label htmlFor="thresholdKRL">KRL STOP Level (cm)</Label>
+                      <Input
+                        id="thresholdKRL"
+                        type="number"
+                        value={thresholdKRL}
+                        onChange={(e) => setThresholdKRL(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="thresholdKAI">KAI STOP Level (cm)</Label>
+                      <Input
+                        id="thresholdKAI"
+                        type="number"
+                        value={thresholdKAI}
+                        onChange={(e) => setThresholdKAI(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="thresholdRain">Rain Threshold (mm)</Label>
+                      <Input
+                        id="thresholdRain"
+                        type="number"
+                        value={thresholdRain}
+                        onChange={(e) => setThresholdRain(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end mt-4">
+                    <Button onClick={() => saveSettings()} className="bg-blue-600 hover:bg-blue-700">
+                      Save Calibration Thresholds
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
@@ -737,7 +788,6 @@ export default function AdminPanel() {
               <div>
                 <Label>Email</Label>
                 <Input value={userModalData.email} onChange={(e:any)=>setUserModalData({...userModalData, email: e.target.value})} />
-                <p className="text-xs text-gray-500 mt-1">Email must end with @kai.id</p>
               </div>
               <div>
                 <Label>Password</Label>

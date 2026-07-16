@@ -9,6 +9,8 @@ import { Badge } from "../components/ui/badge";
 import { Download, Filter, Calendar } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar } from "recharts";
 import { buildChartSeries, fetchHistorical, formatRelativeTime, subscribeToRealtime, toNumber, type MqttEntry } from "../lib/mqttApi";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
 
 const LOCATION = "Manggarai";
 
@@ -19,24 +21,60 @@ function toLocalDateString(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
-type DerivedStatus = "SAFE" | "WARNING" | "CRITICAL";
+type DerivedStatus = "AMAN" | "WARNING" | "STOP";
 
 function deriveStatus(entry: MqttEntry): DerivedStatus {
   const value = toNumber(entry.value, 0);
-  if (entry.topic === "RAINSENSOR") {
-    if (value >= 12) return "CRITICAL";
-    if (value >= 6) return "WARNING";
-    return "SAFE";
+  const topic = entry.topic.toUpperCase();
+
+  if (topic.includes("KRL")) {
+    if (value >= 5) return "STOP";
+    if (value >= 3) return "WARNING";
+    return "AMAN";
   }
 
-  if (value >= 70) return "CRITICAL";
-  if (value >= 60) return "WARNING";
-  return "SAFE";
+  if (topic.includes("KAI")) {
+    if (value >= 15) return "STOP";
+    if (value >= 12) return "WARNING";
+    return "AMAN";
+  }
+
+  if (topic === "RAINSENSOR") {
+    if (value >= 50) return "STOP";
+    if (value >= 25) return "WARNING";
+    return "AMAN";
+  }
+
+  return "AMAN";
+}
+
+function collapseToMinuteBuckets(entries: MqttEntry[]) {
+  const grouped = new Map<string, MqttEntry>();
+
+  entries.forEach((entry) => {
+    const date = new Date(entry.timestamp);
+    const bucket = Number.isNaN(date.getTime())
+      ? entry.timestamp
+      : `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+    const key = `${entry.topic}|${entry.location}|${bucket}`;
+    const current = grouped.get(key);
+    if (!current || new Date(entry.timestamp).getTime() >= new Date(current.timestamp).getTime()) {
+      grouped.set(key, entry);
+    }
+  });
+
+  return [...grouped.values()].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
 }
 
 export default function DataPage() {
   const today = toLocalDateString(new Date());
   const weekAgo = toLocalDateString(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
+  const chartStart = (() => {
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() - 6);
+    return date.getTime();
+  })();
   const [dateFrom, setDateFrom] = useState(weekAgo);
   const [dateTo, setDateTo] = useState(today);
   const [location, setLocation] = useState("all");
@@ -79,7 +117,8 @@ export default function DataPage() {
   }, []);
 
   const filteredRecords = useMemo(() => {
-    return records.filter((entry) => {
+    const collapsedRecords = collapseToMinuteBuckets(records);
+    return collapsedRecords.filter((entry) => {
       const ts = entry.timestamp.slice(0, 10);
       const entryStatus = deriveStatus(entry).toLowerCase();
       const matchesDate = (!dateFrom || ts >= dateFrom) && (!dateTo || ts <= dateTo);
@@ -90,14 +129,22 @@ export default function DataPage() {
   }, [records, dateFrom, dateTo, location, statusFilter]);
 
   const trendData = useMemo(() => {
-    const series = buildChartSeries(records);
+    const last7DayRecords = records.filter((entry) => {
+      const timestamp = new Date(entry.timestamp).getTime();
+      return Number.isFinite(timestamp) && timestamp >= chartStart;
+    });
+    const series = buildChartSeries(last7DayRecords, 7, "day");
     return series.map((item) => ({ time: item.time, KRL: item.KRL ?? null, KAI: item.KAI ?? null }));
-  }, [records]);
+  }, [records, chartStart]);
 
   const rainData = useMemo(() => {
-    const series = buildChartSeries(records);
+    const last7DayRecords = records.filter((entry) => {
+      const timestamp = new Date(entry.timestamp).getTime();
+      return Number.isFinite(timestamp) && timestamp >= chartStart;
+    });
+    const series = buildChartSeries(last7DayRecords, 7, "day");
     return series.map((item) => ({ time: item.time, rain: item.rain ?? 0 }));
-  }, [records]);
+  }, [records, chartStart]);
 
   const historicalData = useMemo(() => {
     return [...filteredRecords].slice(0, 10).map((entry) => ({
@@ -136,24 +183,75 @@ export default function DataPage() {
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case "SAFE":
+      case "AMAN":
         return "bg-green-100 text-green-700 border-green-200";
       case "WARNING":
         return "bg-yellow-100 text-yellow-700 border-yellow-200";
-      case "CRITICAL":
+      case "STOP":
         return "bg-red-100 text-red-700 border-red-200";
       default:
         return "bg-gray-100 text-gray-700 border-gray-200";
     }
   };
 
-  const handleExport = (format: string) => {
-    alert(`Exporting ${filteredRecords.length} records as ${format.toUpperCase()}...`);
+  const buildExportRows = () => {
+    return [...filteredRecords]
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+      .map((entry) => ({
+        timestamp: entry.timestamp_display || entry.timestamp,
+        topic: entry.topic,
+        location: entry.location,
+        value: typeof entry.value === "number" ? entry.value.toFixed(2) : String(entry.value),
+        status: deriveStatus(entry),
+      }));
+  };
+
+  const downloadFile = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportCsv = () => {
+    const rows = buildExportRows();
+    const header = ["Timestamp", "Topic", "Location", "Value", "Status"];
+    const csvLines = [
+      header.join(","),
+      ...rows.map((row) => [row.timestamp, row.topic, row.location, row.value, row.status].map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")),
+    ];
+    const blob = new Blob([csvLines.join("\n")], { type: "text/csv;charset=utf-8;" });
+    downloadFile(blob, `flood-data-${dateFrom || "all"}-to-${dateTo || "all"}.csv`);
+  };
+
+  const exportPdf = () => {
+    const rows = buildExportRows();
+    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    doc.setFontSize(16);
+    doc.text("Flood Monitoring Historical Data", 14, 16);
+    doc.setFontSize(10);
+    doc.text(`Location: ${location === "all" ? LOCATION : LOCATION} | Records: ${rows.length}`, 14, 23);
+
+    autoTable(doc, {
+      startY: 30,
+      head: [["Timestamp", "Topic", "Location", "Value", "Status"]],
+      body: rows.map((row) => [row.timestamp, row.topic, row.location, row.value, row.status]),
+      styles: { fontSize: 9, cellPadding: 2 },
+      headStyles: { fillColor: [37, 99, 235] },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+    });
+
+    doc.save(`flood-data-${dateFrom || "all"}-to-${dateTo || "all"}.pdf`);
   };
 
   const resetFilters = () => {
-    setDateFrom("2026-03-31");
-    setDateTo("2026-03-31");
+    const today = toLocalDateString(new Date());
+    setDateFrom(today);
+    setDateTo(today);
     setLocation("all");
     setStatusFilter("all");
   };
@@ -229,9 +327,9 @@ export default function DataPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Status</SelectItem>
-                  <SelectItem value="safe">Safe</SelectItem>
+                  <SelectItem value="aman">Aman</SelectItem>
                   <SelectItem value="warning">Warning</SelectItem>
-                  <SelectItem value="critical">Critical</SelectItem>
+                  <SelectItem value="stop">Stop</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -266,7 +364,7 @@ export default function DataPage() {
         {/* Water Level Trends */}
         <Card className="border-0 shadow-md">
           <CardHeader>
-            <CardTitle className="text-lg">Water Level Trends</CardTitle>
+            <CardTitle className="text-lg">Water Level Trends 7 Hari Terakhir</CardTitle>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={300}>
@@ -292,7 +390,7 @@ export default function DataPage() {
         {/* Rain Intensity Chart */}
         <Card className="border-0 shadow-md">
           <CardHeader>
-            <CardTitle className="text-lg">Rain Intensity</CardTitle>
+            <CardTitle className="text-lg">Rain Intensity 7 Hari Terakhir</CardTitle>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={300}>
@@ -323,7 +421,7 @@ export default function DataPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => handleExport("csv")}
+              onClick={exportCsv}
               className="gap-2"
             >
               <Download className="w-4 h-4" />
@@ -332,7 +430,7 @@ export default function DataPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => handleExport("pdf")}
+              onClick={exportPdf}
               className="gap-2"
             >
               <Download className="w-4 h-4" />

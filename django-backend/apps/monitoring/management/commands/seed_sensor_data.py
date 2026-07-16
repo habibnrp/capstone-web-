@@ -30,8 +30,8 @@ class Command(BaseCommand):
 
         topics = [
             {"topic": "RAINSENSOR", "location": "Manggarai", "min": 0, "max": 15},
-            {"topic": "WATERLEVELSENSORKAI", "location": "Manggarai", "min": 40, "max": 85},
-            {"topic": "WATERLEVELSENSORKRL", "location": "Manggarai", "min": 35, "max": 80},
+            {"topic": "WATERLEVELSENSORKAI", "location": "Manggarai", "min": 8, "max": 15},
+            {"topic": "WATERLEVELSENSORKRL", "location": "Manggarai", "min": 1, "max": 5},
         ]
 
         now = timezone.now()

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { CloudRain, Clock3, MapPin, RefreshCcw, ShieldAlert, Droplets } from "lucide-react";
 
@@ -38,20 +39,23 @@ type BmkgForecastResponse = {
   }>;
 };
 
-type JakartaForecast = {
+type SearchResult = {
   id: string;
   name: string;
   code: string;
   district: string;
+  city: string;
+  province: string;
 };
 
-const JAKARTA_AREAS: JakartaForecast[] = [
-  { id: "kemayoran", name: "Kemayoran", code: "31.71.03.1001", district: "Jakarta Pusat" },
-  { id: "jatipulo", name: "Jatipulo", code: "31.73.07.1004", district: "Jakarta Barat" },
-  { id: "cilandak", name: "Cilandak", code: "31.74.05.1001", district: "Jakarta Selatan" },
-  { id: "kelapa-gading", name: "Kelapa Gading", code: "31.72.05.1002", district: "Jakarta Utara" },
-  { id: "klender", name: "Klender", code: "31.75.04.1001", district: "Jakarta Timur" },
-];
+const DEFAULT_AREA: SearchResult = {
+  id: "kemayoran",
+  name: "Kemayoran",
+  code: "31.71.03.1001",
+  district: "Kemayoran",
+  city: "Kota Adm. Jakarta Pusat",
+  province: "DKI Jakarta",
+};
 
 function rainLabel(item?: BmkgForecastItem) {
   if (!item) return "-";
@@ -92,11 +96,15 @@ async function fetchForecast(code: string) {
 }
 
 export default function PredictionPage() {
-  const [selectedArea, setSelectedArea] = useState(JAKARTA_AREAS[0]);
+  const [selectedArea, setSelectedArea] = useState(DEFAULT_AREA);
   const [forecast, setForecast] = useState<BmkgForecastResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("Kemayoran");
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([DEFAULT_AREA]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -124,7 +132,45 @@ export default function PredictionPage() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [selectedArea]);
+  }, [selectedArea.code]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      const query = searchQuery.trim();
+      if (!query) {
+        if (!cancelled) {
+          setSearchResults([DEFAULT_AREA]);
+          setSearchLoading(false);
+          setSearchError(null);
+        }
+        return;
+      }
+
+      try {
+        setSearchLoading(true);
+        setSearchError(null);
+        const response = await fetch(`/api/regions/search?q=${encodeURIComponent(query)}&limit=25`);
+        if (!response.ok) {
+          throw new Error(`Region search failed (${response.status})`);
+        }
+        const body = await response.json();
+        if (cancelled) return;
+        setSearchResults(Array.isArray(body?.results) ? body.results : []);
+      } catch (err) {
+        if (cancelled) return;
+        setSearchResults([]);
+        setSearchError(err instanceof Error ? err.message : "Gagal mencari wilayah BMKG");
+      } finally {
+        if (!cancelled) setSearchLoading(false);
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [searchQuery]);
 
   const hourlyForecast = useMemo(() => {
     const block = forecast?.data?.[0]?.cuaca?.[0] ?? [];
@@ -148,9 +194,9 @@ export default function PredictionPage() {
               <CloudRain className="h-4 w-4" />
               BMKG Realtime Forecast
             </div>
-            <h3 className="mt-2 text-2xl font-semibold text-gray-900">Prediction Jakarta</h3>
+            <h3 className="mt-2 text-2xl font-semibold text-gray-900">Prediction Wilayah BMKG</h3>
             <p className="mt-2 text-sm text-gray-600">
-              Menampilkan prakiraan hujan terbaru BMKG untuk beberapa wilayah Jakarta berdasarkan kode adm4.
+              Menampilkan prakiraan hujan terbaru BMKG untuk wilayah yang dapat dicari dari seluruh Indonesia.
             </p>
             <p className="mt-2 text-xs text-gray-500">
               Sumber data: BMKG Data Terbuka. Aplikasi wajib mencantumkan BMKG sebagai sumber data.
@@ -173,18 +219,50 @@ export default function PredictionPage() {
           </div>
         </div>
 
-        <div className="mt-5 flex flex-wrap gap-2">
-          {JAKARTA_AREAS.map((area) => (
-            <Button
-              key={area.id}
-              type="button"
-              variant={selectedArea.id === area.id ? "default" : "outline"}
-              className={selectedArea.id === area.id ? "bg-blue-600 hover:bg-blue-700" : ""}
-              onClick={() => setSelectedArea(area)}
-            >
-              {area.name}
-            </Button>
-          ))}
+        <div className="mt-5 space-y-3">
+          <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-gray-700" htmlFor="search-area">
+                Cari wilayah BMKG
+              </label>
+              <Input
+                id="search-area"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Contoh: Gambir, Kemayoran, Jakarta, Surabaya, Bandung"
+              />
+            </div>
+            <Button type="button" variant="outline" onClick={() => setSearchQuery("")}>Bersihkan</Button>
+          </div>
+          <p className="text-xs text-gray-500">
+            Cari nama kelurahan/desa untuk melihat prakiraan BMKG. Hasil pencarian bisa dipakai langsung sebagai kode adm4.
+          </p>
+          {searchError && (
+            <p className="text-sm text-red-600">{searchError}</p>
+          )}
+          <div className="max-h-72 overflow-auto rounded-lg border border-gray-200 bg-gray-50 p-2">
+            {searchLoading && (
+              <div className="px-3 py-2 text-sm text-gray-500">Mencari wilayah BMKG...</div>
+            )}
+            {!searchLoading && searchResults.length === 0 && (
+              <div className="px-3 py-2 text-sm text-gray-500">Tidak ada wilayah yang cocok.</div>
+            )}
+            {!searchLoading && searchResults.map((area) => {
+              const isSelected = selectedArea.code === area.code;
+              return (
+                <button
+                  key={area.code}
+                  type="button"
+                  onClick={() => setSelectedArea(area)}
+                  className={`mb-2 flex w-full flex-col rounded-md border px-3 py-2 text-left transition ${isSelected ? "border-blue-500 bg-blue-50" : "border-gray-200 bg-white hover:bg-gray-50"}`}
+                >
+                  <span className="text-sm font-semibold text-gray-900">{area.name}</span>
+                  <span className="text-xs text-gray-500">{area.district}, {area.city}, {area.province}</span>
+                  <span className="text-xs text-gray-400">adm4 {area.code}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </section>
 
@@ -203,7 +281,7 @@ export default function PredictionPage() {
             <div className="rounded-lg bg-gray-50 p-4">
               <p className="text-xs uppercase tracking-wide text-gray-500">Wilayah</p>
               <p className="mt-1 font-medium text-gray-900">{forecast?.lokasi?.desa || selectedArea.name}</p>
-              <p className="text-sm text-gray-500">{forecast?.lokasi?.kotkab || selectedArea.district}, DKI Jakarta</p>
+              <p className="text-sm text-gray-500">{forecast?.lokasi?.kotkab || selectedArea.city}, {forecast?.lokasi?.provinsi || selectedArea.province}</p>
             </div>
             <div className="rounded-lg bg-gray-50 p-4">
               <p className="text-xs uppercase tracking-wide text-gray-500">Update BMKG</p>
@@ -287,7 +365,7 @@ export default function PredictionPage() {
           <div className="rounded-lg bg-gray-50 p-4">
             <p className="text-xs uppercase tracking-wide text-gray-500">Area aktif</p>
             <p className="mt-1 text-xl font-semibold text-gray-900">{selectedArea.name}</p>
-            <p className="text-sm text-gray-500">{selectedArea.district}</p>
+            <p className="text-sm text-gray-500">{selectedArea.district}, {selectedArea.city}</p>
           </div>
           <div className="rounded-lg bg-gray-50 p-4">
             <p className="text-xs uppercase tracking-wide text-gray-500">Potensi hujan</p>

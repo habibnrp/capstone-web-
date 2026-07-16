@@ -21,9 +21,11 @@ export type TopicsResponse = {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 const WS_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:8000";
+const API_ROOT = API_BASE_URL.replace(/\/$/, "").replace(/\/api$/, "");
+const WS_ROOT = WS_URL.replace(/\/$/, "").replace(/\/ws$/, "");
 
 export async function fetchRealtime(): Promise<RealtimeResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/monitoring/realtime/`);
+  const response = await fetch(`${API_ROOT}/api/monitoring/realtime/`);
   if (!response.ok) {
     throw new Error(`Failed to load realtime data (${response.status})`);
   }
@@ -42,7 +44,7 @@ export async function fetchHistorical(params?: {
   if (params?.location) queryParams.append('location', params.location);
   if (params?.status) queryParams.append('status', params.status);
 
-  const url = `${API_BASE_URL}/api/monitoring/historical/?${queryParams}`;
+  const url = `${API_ROOT}/api/monitoring/historical/?${queryParams}`;
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`Failed to load historical data (${response.status})`);
@@ -53,7 +55,7 @@ export async function fetchHistorical(params?: {
 }
 
 export async function fetchTopics(): Promise<TopicsResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/monitoring/topics/`);
+  const response = await fetch(`${API_ROOT}/api/monitoring/topics/`);
   if (!response.ok) {
     throw new Error(`Failed to load sensor topics (${response.status})`);
   }
@@ -65,7 +67,7 @@ export function subscribeToRealtime(callback: (data: any) => void): WebSocket {
   const maxReconnectAttempts = 5;
   const reconnectInterval = 3000; // 3 seconds
   const fallbackUrl = `ws://localhost:3000`;
-  const primaryUrl = `${WS_URL}/ws/monitoring/`;
+  const primaryUrl = `${WS_ROOT}/ws/monitoring/`;
   let triedFallback = false;
   let ws: WebSocket;
 
@@ -162,7 +164,11 @@ export function formatRelativeTime(timestamp?: string | null) {
   return `${diffMins} min ago`;
 }
 
-export function buildChartSeries(entries: MqttEntry[]) {
+export function buildChartSeries(
+  entries: MqttEntry[],
+  maxPoints = 8,
+  granularity: "hour" | "day" = "hour"
+) {
   const byBucket = new Map<
     string,
     { time: string; KRL?: number; KAI?: number; rain?: number }
@@ -172,9 +178,16 @@ export function buildChartSeries(entries: MqttEntry[]) {
     const date = new Date(entry.timestamp);
     const bucket = Number.isNaN(date.getTime())
       ? entry.timestamp
-      : `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}`;
+      : granularity === "day"
+        ? `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`
+        : `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:00`;
+    const label = Number.isNaN(date.getTime())
+      ? entry.timestamp
+      : granularity === "day"
+        ? `${String(date.getMonth() + 1).padStart(2, "0")}/${String(date.getDate()).padStart(2, "0")}`
+        : `${String(date.getHours()).padStart(2, "0")}:00`;
 
-    const current = byBucket.get(bucket) ?? { time: bucket };
+    const current = byBucket.get(bucket) ?? { time: label };
     const numericValue = toNumber(entry.value, 0);
 
     if (entry.topic === "WATERLEVELSENSORKRL") current.KRL = numericValue;
@@ -184,5 +197,5 @@ export function buildChartSeries(entries: MqttEntry[]) {
     byBucket.set(bucket, current);
   });
 
-  return [...byBucket.values()].slice(-8);
+  return [...byBucket.values()].slice(-maxPoints);
 }
