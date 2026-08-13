@@ -171,7 +171,7 @@ app.get('/api/regions/search', async (req, res) => {
   if (!query) {
     return res.json({ results: [] });
   }
-
+  
   try {
     const results = await wilayah(query, 'kelurahan');
     const mapped = (Array.isArray(results) ? results : [])

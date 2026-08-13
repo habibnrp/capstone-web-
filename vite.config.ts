@@ -33,17 +33,27 @@ export default defineConfig({
 
   server: {
     host: '0.0.0.0',
+    port: 5173,
+    strictPort: false,
     proxy: {
+      '/api/monitoring': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+      },
       '/api/regions': {
         target: 'http://127.0.0.1:3000',
         changeOrigin: true,
       },
-      '/api': {
-        target: 'http://127.0.0.1:8000',
+      '/api/dashboard': {
+        target: 'http://127.0.0.1:3000',
+        changeOrigin: true,
+      },
+      '/api/data': {
+        target: 'http://127.0.0.1:3000',
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://127.0.0.1:8000',
+        target: 'ws://127.0.0.1:3000',
         ws: true,
         changeOrigin: true,
       },

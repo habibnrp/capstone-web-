@@ -19,13 +19,13 @@ export type TopicsResponse = {
   location?: string;
 };
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
-const WS_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:8000";
-const API_ROOT = API_BASE_URL.replace(/\/$/, "").replace(/\/api$/, "");
-const WS_ROOT = WS_URL.replace(/\/$/, "").replace(/\/ws$/, "");
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000";
+const WS_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:3000";
+const API_ROOT = API_BASE_URL.replace(/\/$/, "");
+const WS_ROOT = WS_URL.replace(/\/$/, "");
 
 export async function fetchRealtime(): Promise<RealtimeResponse> {
-  const response = await fetch(`${API_ROOT}/api/monitoring/realtime/`);
+  const response = await fetch(`${API_ROOT}/api/dashboard/realtime`);
   if (!response.ok) {
     throw new Error(`Failed to load realtime data (${response.status})`);
   }
@@ -44,7 +44,7 @@ export async function fetchHistorical(params?: {
   if (params?.location) queryParams.append('location', params.location);
   if (params?.status) queryParams.append('status', params.status);
 
-  const url = `${API_ROOT}/api/monitoring/historical/?${queryParams}`;
+  const url = `${API_ROOT}/api/data/historical?${queryParams}`;
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`Failed to load historical data (${response.status})`);
@@ -55,7 +55,7 @@ export async function fetchHistorical(params?: {
 }
 
 export async function fetchTopics(): Promise<TopicsResponse> {
-  const response = await fetch(`${API_ROOT}/api/monitoring/topics/`);
+  const response = await fetch(`${API_ROOT}/api/data/topics`);
   if (!response.ok) {
     throw new Error(`Failed to load sensor topics (${response.status})`);
   }
@@ -67,7 +67,7 @@ export function subscribeToRealtime(callback: (data: any) => void): WebSocket {
   const maxReconnectAttempts = 5;
   const reconnectInterval = 3000; // 3 seconds
   const fallbackUrl = `ws://localhost:3000`;
-  const primaryUrl = `${WS_ROOT}/ws/monitoring/`;
+  const primaryUrl = WS_ROOT;
   let triedFallback = false;
   let ws: WebSocket;
 
