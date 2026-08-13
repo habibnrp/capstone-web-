@@ -20,7 +20,7 @@ services:
     environment:
       ADMIN_SEED_EMAIL: admin@kai.id
       ADMIN_SEED_NAME: Admin
-      ADMIN_SEED_PASSWORD: admin123
+      ADMIN_SEED_PASSWORD: Admin1234!
       DJANGO_SECRET_KEY: change-me-in-production
       DJANGO_DEBUG: "False"
       DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,backend
@@ -31,27 +31,36 @@ services:
       DB_PASSWORD: postgres
       DB_HOST: db
       DB_PORT: 5432
-      MQTT_BROKER_HOST: broker.emqx.io
-      MQTT_BROKER_PORT: 1883
-      MQTT_CLIENT_ID: mqttx_0d0ab77a
-      MQTT_TOPIC_RAIN: RAINSENSORANCOL
-      MQTT_TOPIC_KAI: WATERLEVELSENSORKAI
-      MQTT_TOPIC_KRL: WATERLEVELSENSORKRL
     depends_on:
       db:
         condition: service_healthy
     ports:
       - "8000:8000"
 
+  mqtt-bridge:
+    build:
+      context: .
+      dockerfile: docker/mqtt-bridge/Dockerfile
+    environment:
+      PORT: 3000
+      DJANGO_API_URL: http://backend:8000/api/monitoring/ingest/
+      DJANGO_HISTORICAL_API_URL: http://backend:8000/api/monitoring/historical/
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+
   frontend:
     build:
       context: .
       dockerfile: docker/frontend/Dockerfile
       args:
-        VITE_API_BASE_URL: http://localhost:8000
-        VITE_WS_URL: ws://localhost:8000
+        VITE_API_BASE_URL: http://localhost:3000
+        VITE_WS_URL: ws://localhost:3000
+        VITE_AUTH_API_BASE_URL: http://localhost:8000
     depends_on:
       - backend
+      - mqtt-bridge
     ports:
       - "8080:80"
 

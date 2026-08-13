@@ -48,12 +48,14 @@ django-backend/
 
 ## Connection notes
 - Frontend dev server origin: `http://localhost:5173` or `http://localhost:5174`
-- Django API origin: `http://localhost:8000`
+- Django API origin (auth/admin): `http://localhost:8000`
+- Realtime API + WebSocket origin (Node MQTT bridge): `http://localhost:3000`
 - MQTT broker: `mqtt://broker.emqx.io:1883`
 
 ## Suggested frontend env
 Set this in the frontend `.env` file later:
 ```env
-VITE_API_BASE_URL=http://localhost:8000
-VITE_WS_URL=ws://localhost:8000/ws/monitoring/
+VITE_API_BASE_URL=http://localhost:3000
+VITE_WS_URL=ws://localhost:3000
+VITE_AUTH_API_BASE_URL=http://localhost:8000
 ```

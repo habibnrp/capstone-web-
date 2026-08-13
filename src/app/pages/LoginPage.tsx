@@ -18,7 +18,7 @@ export default function LoginPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
-  const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000").replace(/\/$/, "").replace(/\/api$/, "");
+  const AUTH_API_BASE = (import.meta.env.VITE_AUTH_API_BASE_URL ?? "http://localhost:8000").replace(/\/$/, "").replace(/\/api$/, "");
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -28,7 +28,7 @@ export default function LoginPage() {
       setErrorMsg("Email and password are required");
       return;
     }
-    fetch(`${API_BASE}/api/monitoring/login/`, {
+    fetch(`${AUTH_API_BASE}/api/monitoring/login/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
@@ -75,7 +75,7 @@ export default function LoginPage() {
     }
 
     // Request OTP from backend
-    fetch(`${API_BASE}/api/monitoring/signup/`, {
+    fetch(`${AUTH_API_BASE}/api/monitoring/signup/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password }),
@@ -102,7 +102,7 @@ export default function LoginPage() {
       return;
     }
 
-    fetch(`${API_BASE}/api/monitoring/signup/verify-otp/`, {
+    fetch(`${AUTH_API_BASE}/api/monitoring/signup/verify-otp/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, otp }),

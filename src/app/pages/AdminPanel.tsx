@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
 import { Badge } from "../components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
-import { subscribeToRealtime } from "../lib/mqttApi";
+import { fetchRealtime, subscribeToRealtime } from "../lib/mqttApi";
 import { 
   Users, 
   Settings, 
@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 
 // Dynamic state fetched from backend
-const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000").replace(/\/$/, "").replace(/\/api$/, "");
+const API_BASE = (import.meta.env.VITE_AUTH_API_BASE_URL ?? "http://localhost:8000").replace(/\/$/, "").replace(/\/api$/, "");
 
 const defaultUsers: any[] = []
 const defaultSensors: any[] = []
@@ -85,19 +85,12 @@ export default function AdminPanel() {
     const pollStatus = async () => {
       const startedAt = performance.now();
       try {
-        const res = await fetch(`${API_BASE}/api/monitoring/realtime/`, { cache: "no-store" });
+        const data = await fetchRealtime();
         const latency = Math.round(performance.now() - startedAt);
         if (cancelled) return;
 
-        setServerOnline(res.ok);
+        setServerOnline(true);
         setNetworkLatency(latency);
-        if (!res.ok) {
-          setNetworkStatus("Offline");
-          setMqttConnected(false);
-          return;
-        }
-
-        const data = await res.json();
         const latest = data?.latest || {};
         let newestTs = 0;
         Object.values(latest).forEach((entry: any) => {

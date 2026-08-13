@@ -1,35 +1,72 @@
 
-  # Flood Monitoring System UI
+# Flood Monitoring System
 
-  This is a code bundle for Flood Monitoring System UI. The original project is available at https://www.figma.com/design/e0QpFeqApnb3oHH693Owcx/Flood-Monitoring-System-UI.
+Capstone flood monitoring system with a split backend architecture:
 
-  ## Local Development
+- Frontend (React + Vite, served by Nginx in Docker)
+- Django backend for authentication, admin, and persistence
+- Node.js MQTT bridge for realtime data + WebSocket broadcast
+- PostgreSQL for persistent data storage
 
-  Run the frontend with:
+## Runtime Architecture
 
-  ```bash
-  npm i
-  npm run dev
-  ```
+- Frontend: `http://localhost:8080`
+- Django API (auth/admin): `http://localhost:8000`
+- MQTT bridge API + WebSocket (realtime): `http://localhost:3000`
 
-  Run the backend separately from `django-backend/`.
+## Team Installation via Docker
 
-  ## Docker Deployment
+### 1) Clone repository
 
-  Use Docker Compose for a repeatable deployment on another PC:
+```bash
+git clone https://github.com/habibnrp/capstone-web-.git
+cd capstone-web-
+```
 
-  ```bash
-  docker compose up --build
-  ```
+### 2) Start all services
 
-  After it starts:
-  - Frontend: `http://localhost:8080`
-  - Backend API: `http://localhost:8000`
+```bash
+docker compose up --build
+```
 
-  The Docker stack uses PostgreSQL, the Django backend, and an Nginx-served frontend.
+Compose will start these services:
 
-  The default admin account is seeded automatically on startup:
-  - Email: `admin@kai.id`
-  - Password: `Admin1234!`
+- `db` (PostgreSQL)
+- `backend` (Django on port 8000)
+- `mqtt-bridge` (Node on port 3000)
+- `frontend` (Nginx static app on port 8080)
+
+### 3) Login credentials
+
+Default admin user is seeded on backend startup:
+
+- Email: `admin@kai.id`
+- Password: `Admin1234!`
+
+## Local Development (without Docker)
+
+Use separate terminals:
+
+1. Frontend
+```bash
+npm install
+npm run dev
+```
+
+2. Django backend
+```bash
+cd django-backend
+pip install -r requirements.txt
+python manage.py migrate
+python manage.py seed_default_admin
+daphne -b 0.0.0.0 -p 8000 config.asgi:application
+```
+
+3. MQTT bridge
+```bash
+cd server
+npm install
+npm start
+```
 
 
