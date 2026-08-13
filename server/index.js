@@ -7,8 +7,9 @@ const axios = require('axios');
 const wilayah = require('wilayah-indonesia');
 
 const PORT = process.env.PORT || 3000;
-const DJANGO_API = process.env.DJANGO_API_URL || 'http://localhost:8000/api/monitoring/ingest/';
-const DJANGO_HISTORICAL_API = process.env.DJANGO_HISTORICAL_API_URL || 'http://localhost:8000/api/monitoring/historical/';
+const normalizeLocalhost = (url) => String(url || '').replace('://localhost:', '://127.0.0.1:');
+const DJANGO_API = normalizeLocalhost(process.env.DJANGO_API_URL || 'http://127.0.0.1:8000/api/monitoring/ingest/');
+const DJANGO_HISTORICAL_API = normalizeLocalhost(process.env.DJANGO_HISTORICAL_API_URL || 'http://127.0.0.1:8000/api/monitoring/historical/');
 
 // Single-location name (can be adjusted later)
 const LOCATION = 'Manggarai';

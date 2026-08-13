@@ -43,12 +43,13 @@ export default function AdminPanel() {
   const [telegramChatId, setTelegramChatId] = useState("");
   const [showSensorModal, setShowSensorModal] = useState(false);
   const [sensorModalMode, setSensorModalMode] = useState<'add' | 'edit'>('edit');
-  const [sensorConfigData, setSensorConfigData] = useState<any>({ topic: '', clientId: '', username: '', enabled: true, location: '' });
+  const [sensorConfigData, setSensorConfigData] = useState<any>({ topic: '', clientId: '', enabled: true, location: '' });
   const [serverOnline, setServerOnline] = useState(false);
   const [mqttConnected, setMqttConnected] = useState(false);
   const [networkStatus, setNetworkStatus] = useState("Checking");
   const [networkLatency, setNetworkLatency] = useState<number | null>(null);
   const [lastMqttSeen, setLastMqttSeen] = useState<number | null>(null);
+  const [liveTopicSeenAt, setLiveTopicSeenAt] = useState<Record<string, number>>({});
 
   const handleAuthFailure = () => {
     localStorage.removeItem('fm_token');
@@ -93,10 +94,18 @@ export default function AdminPanel() {
         setNetworkLatency(latency);
         const latest = data?.latest || {};
         let newestTs = 0;
+        const nextLiveTopicSeenAt: Record<string, number> = {};
         Object.values(latest).forEach((entry: any) => {
           const parsed = entry?.timestamp ? Date.parse(entry.timestamp) : Number.NaN;
           if (!Number.isNaN(parsed) && parsed > newestTs) newestTs = parsed;
+          if (entry?.topic && !Number.isNaN(parsed) && parsed > 0) {
+            nextLiveTopicSeenAt[String(entry.topic)] = parsed;
+          }
         });
+
+        if (Object.keys(nextLiveTopicSeenAt).length > 0) {
+          setLiveTopicSeenAt((prev) => ({ ...prev, ...nextLiveTopicSeenAt }));
+        }
 
         if (newestTs > 0) setLastMqttSeen(newestTs);
         const ageMs = newestTs > 0 ? Date.now() - newestTs : Number.POSITIVE_INFINITY;
@@ -120,7 +129,10 @@ export default function AdminPanel() {
     ws = subscribeToRealtime((message: any) => {
       const payload = message?.data ?? message;
       if (payload?.topic) {
-        setLastMqttSeen(Date.now());
+        const seenAt = payload?.timestamp ? Date.parse(payload.timestamp) : Date.now();
+        const normalizedSeenAt = Number.isNaN(seenAt) ? Date.now() : seenAt;
+        setLastMqttSeen(normalizedSeenAt);
+        setLiveTopicSeenAt((prev) => ({ ...prev, [String(payload.topic)]: normalizedSeenAt }));
         setMqttConnected(true);
       }
     });
@@ -137,6 +149,14 @@ export default function AdminPanel() {
     const sec = Math.max(0, Math.floor((Date.now() - lastMqttSeen) / 1000));
     if (sec < 60) return `${sec}s ago`;
     return `${Math.floor(sec / 60)}m ago`;
+  };
+
+  const resolveSensorStatus = (sensor: any) => {
+    if (sensor.status === 'Disabled') return 'Disabled';
+    const seenAt = liveTopicSeenAt[String(sensor.topic)];
+    if (!seenAt) return sensor.status || 'Offline';
+    const isFresh = Date.now() - seenAt <= 2 * 60 * 1000;
+    return isFresh ? 'Online' : (sensor.status || 'Offline');
   };
 
   async function fetchUsers() {
@@ -233,7 +253,6 @@ export default function AdminPanel() {
     setSensorConfigData({
       topic: mode === 'add' ? '' : sensor.topic,
       clientId: mode === 'add' ? '' : sensor.clientId || '',
-      username: mode === 'add' ? '' : sensor.username || '',
       enabled: mode === 'add' ? true : sensor.status !== 'Disabled',
       location: sensor.location || '',
     });
@@ -243,7 +262,7 @@ export default function AdminPanel() {
   function closeSensorModal(){
     setShowSensorModal(false);
     setSensorModalMode('edit');
-    setSensorConfigData({ topic: '', clientId: '', username: '', enabled: true, location: '' });
+    setSensorConfigData({ topic: '', clientId: '', enabled: true, location: '' });
   }
 
   async function handleCalibrateSensor(sensor:any){
@@ -273,7 +292,6 @@ export default function AdminPanel() {
         body: JSON.stringify({
           topic: sensorConfigData.topic,
           clientId: sensorConfigData.clientId,
-          username: sensorConfigData.username,
           enabled: sensorConfigData.enabled,
           location: sensorConfigData.location,
         })
@@ -586,7 +604,7 @@ export default function AdminPanel() {
                 <h3 className="text-lg font-semibold text-gray-900">Sensor Configuration</h3>
                 <Button
                   className="gap-2 bg-blue-600 hover:bg-blue-700"
-                  onClick={() => openSensorModal({ topic: 'RAINSENSORANCOL', clientId: 'mqttx_0d0ab77a', username: 'CAPSTONE', location: 'Manggarai', status: 'Online' }, 'add')}
+                  onClick={() => openSensorModal({ topic: 'RAINSENSORANCOL', clientId: 'mqttx_0d0ab77a', location: 'Manggarai', status: 'Online' }, 'add')}
                 >
                   <Plus className="w-4 h-4" />
                   Add Sensor
@@ -640,7 +658,6 @@ export default function AdminPanel() {
                     <TableRow>
                       <TableHead>Sensor Name</TableHead>
                       <TableHead>Client ID</TableHead>
-                      <TableHead>Username</TableHead>
                       <TableHead>Location</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Last Calibration</TableHead>
@@ -650,20 +667,25 @@ export default function AdminPanel() {
                   <TableBody>
                     {sensors.map((sensor, idx) => (
                       <TableRow key={sensor.topic + '_' + sensor.location + '_' + idx}>
+                        {(() => {
+                          const effectiveStatus = resolveSensorStatus(sensor);
+                          return (
+                            <>
                         <TableCell className="font-medium">{sensor.topic}</TableCell>
                         <TableCell>{sensor.clientId || '-'}</TableCell>
-                        <TableCell>{sensor.username || '-'}</TableCell>
                         <TableCell>{sensor.location}</TableCell>
                         <TableCell>
                           <Badge
                             variant="outline"
                             className={
-                              sensor.status === "Online"
+                              effectiveStatus === "Online"
                                 ? "bg-green-100 text-green-700 border-green-200"
+                                : effectiveStatus === "Disabled"
+                                ? "bg-gray-100 text-gray-700 border-gray-200"
                                 : "bg-red-100 text-red-700 border-red-200"
                             }
                           >
-                            {sensor.status}
+                            {effectiveStatus}
                           </Badge>
                         </TableCell>
                         <TableCell>{sensor.lastCalibration || '-'}</TableCell>
@@ -677,6 +699,9 @@ export default function AdminPanel() {
                             </Button>
                           </div>
                         </TableCell>
+                            </>
+                          );
+                        })()}
                       </TableRow>
                     ))}
                   </TableBody>
@@ -817,15 +842,6 @@ export default function AdminPanel() {
                   onChange={(e:any) => setSensorConfigData({ ...sensorConfigData, clientId: e.target.value.trimStart() })}
                   placeholder="mqttx_0d0ab77a"
                 />
-              </div>
-              <div>
-                <Label>Username</Label>
-                <Input
-                  value={sensorConfigData.username}
-                  onChange={(e:any) => setSensorConfigData({ ...sensorConfigData, username: e.target.value.trimStart() })}
-                  placeholder="CAPSTONE"
-                />
-                <p className="text-xs text-gray-500 mt-1">Untuk MQTTX, isi sesuai broker yang dipakai.</p>
               </div>
               <div>
                 <Label>Status</Label>
