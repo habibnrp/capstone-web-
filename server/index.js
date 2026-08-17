@@ -64,7 +64,7 @@ const latest = {
 };
 const history = [];
 const lastAcceptedAtByTopic = new Map();
-const INGEST_INTERVAL_MS = 60 * 1000;
+const INGEST_INTERVAL_MS = 5 * 1000;
 
 const app = express();
 app.use(cors());
@@ -114,7 +114,7 @@ mqttClient.on('message', (topic, message) => {
   const normalizedTopic = String(topic || '').toUpperCase();
   const lastAcceptedAt = lastAcceptedAtByTopic.get(normalizedTopic) || 0;
   if (now - lastAcceptedAt < INGEST_INTERVAL_MS) {
-    console.log('⏭️ Skipped MQTT message due to 1 minute throttle:', normalizedTopic, payload);
+    console.log('Skipped MQTT message due to 5-second throttle:', normalizedTopic, payload);
     return;
   }
   lastAcceptedAtByTopic.set(normalizedTopic, now);
@@ -140,7 +140,7 @@ mqttClient.on('message', (topic, message) => {
 
   // broadcast to websocket clients (use type 'mqtt_update' for frontend compatibility)
   broadcast({ type: 'mqtt_update', data: entry });
-  console.log('📨 Received', topic, payload, '=>', entry.value, entry.unit || '');
+  console.log('Received', topic, payload, '=>', entry.value, entry.unit || '');
 });
 
 // REST endpoints
